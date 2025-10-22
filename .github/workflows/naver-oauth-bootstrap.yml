@@ -1,84 +1,67 @@
 name: Naver OAuth Bootstrap
 
 on:
-  workflow_dispatch: {}  # 수동 실행 버튼 표시 (Run workflow가 생김)
+  workflow_dispatch: {}  # 수동 실행 버튼 생성
 
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      actions: write       # 토큰을 저장하기 위해 필요
-      statuses: write
-      id-token: write
-    env:
-      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
-      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-      WEBHOOK_ID: ${{ secrets.WEBHOOK_ID }}
-      WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
-      REDIRECT_URI: https://webhook.site/${{ secrets.WEBHOOK_ID }}
+      contents: write      # token 저장을 위한 권한
+      actions: write
 
     steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq gh
+
       - name: Show authorize URL
-        id: authurl
+        id: show
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          REDIRECT_URI: https://webhook.site/${{ secrets.WEBHOOK_ID }}
         run: |
           STATE=$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
-          AUTH_URL="https://nid.naver.com/oauth2.0/authorize?response_type=code&client_id=${NAVER_CLIENT_ID}&redirect_uri=$(python3 - <<'PY'
-import urllib.parse,os
-print(urllib.parse.quote(os.environ['REDIRECT_URI'], safe=''))
-PY
-)&state=${STATE}"
-          echo "Authorize URL: $AUTH_URL"
+          ENCODED_REDIRECT=$(python3 -c "import urllib.parse,os; print(urllib.parse.quote(os.environ['REDIRECT_URI'], safe=''))")
           echo "STATE=$STATE" >> $GITHUB_ENV
+          AUTH_URL="https://nid.naver.com/oauth2.0/authorize?response_type=code&client_id=${NAVER_CLIENT_ID}&redirect_uri=${ENCODED_REDIRECT}&state=${STATE}"
+          echo "Authorize URL: $AUTH_URL"
           echo "auth-url=$AUTH_URL" >> $GITHUB_OUTPUT
-          echo ""
-          echo "[1/3] 위 URL 클릭 → 네이버 로그인/동의하세요."
-          echo "로그인 완료 후 웹훅 페이지는 바로 닫아도 됩니다."
 
-      - name: Wait for OAuth callback on webhook.site (max 5 min)
-        id: waitcode
+      - name: Wait for user to authorize (max 5 min)
+        id: wait
+        env:
+          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          STATE: ${{ env.STATE }}
         run: |
-          python3 - <<'PY'
-import os, time, sys, json, urllib.parse
-import urllib.request
-TOKEN=os.environ['WEBHOOK_TOKEN']
-STATE=os.environ['STATE']
-API=f"https://webhook.site/token/{TOKEN}/requests?page=1"
+          echo "[1/3] 위 Authorize URL 클릭 → 네이버 로그인/동의하세요."
+          echo "로그인 후 webhook.site 페이지가 뜨면 바로 닫아도 됩니다."
+          echo ""
+          echo "👉 최대 5분 동안 code 수신 대기 중..."
 
-def fetch():
-    with urllib.request.urlopen(API, timeout=20) as r:
-        return json.load(r)
+          for i in {1..100}; do
+            RESP=$(curl -sS "https://webhook.site/token/${WEBHOOK_TOKEN}/requests?page=1")
+            CODE=$(echo "$RESP" | jq -r '.data[0].url' | sed 's/.*code=\([^&]*\).*/\1/')
+            STATE_CHECK=$(echo "$RESP" | jq -r '.data[0].url' | sed 's/.*state=\([^&]*\).*/\1/')
+            if [ "$CODE" != "" ] && [ "$STATE_CHECK" = "$STATE" ]; then
+              echo "code=$CODE" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            sleep 3
+          done
 
-code=None
-start=time.time()
-while time.time()-start < 300:  # 5 minutes 대기
-    data=fetch()
-    for req in data.get('data', []):
-        url=req.get('url','') or ''
-        q=urllib.parse.urlparse(url).query
-        qs=urllib.parse.parse_qs(q)
-        c=qs.get('code',[None])[0]
-        s=qs.get('state',[None])[0]
-        if c and s==STATE:
-            code=c
-            break
-    if code:
-        break
-    time.sleep(3)
-
-if not code:
-    print('ERROR: code 못 받음 – Redirect URI or WEBHOOK 설정 확인 요망')
-    sys.exit(1)
-
-print('Got code:', code)
-with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-    f.write(f"code={code}\n")
-PY
+          echo "❌ ERROR: code를 5분 안에 받지 못했습니다."
+          exit 1
 
       - name: Exchange code for tokens
         id: token
+        env:
+          CODE: ${{ steps.wait.outputs.code }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          STATE: ${{ env.STATE }}
         run: |
-          CODE=${{ steps.waitcode.outputs.code }}
           RESP=$(curl -sS -X POST "https://nid.naver.com/oauth2.0/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=authorization_code" \
@@ -87,23 +70,17 @@ PY
             -d "code=${CODE}" \
             -d "state=${STATE}")
           echo "$RESP" | jq .
-          ACCESS=$(echo "$RESP" | jq -r .access_token)
-          REFRESH=$(echo "$RESP" | jq -r .refresh_token)
-          if [ -z "$ACCESS" ] || [ "$ACCESS" = "null" ]; then echo "❌ Token 교환 실패"; exit 1; fi
-          echo "access=$ACCESS" >> $GITHUB_OUTPUT
-          echo "refresh=$REFRESH" >> $GITHUB_OUTPUT
+          echo "access=$(echo "$RESP" | jq -r .access_token)" >> $GITHUB_OUTPUT
+          echo "refresh=$(echo "$RESP" | jq -r .refresh_token)" >> $GITHUB_OUTPUT
 
-      - name: Install GitHub CLI
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y gh jq
-
-      - name: Save tokens to repo secrets
+      - name: Save tokens to Secrets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCESS: ${{ steps.token.outputs.access }}
+          REFRESH: ${{ steps.token.outputs.refresh }}
         run: |
-          gh secret set NAVER_ACCESS_TOKEN --body "${{ steps.token.outputs.access }}"
-          if [ "${{ steps.token.outputs.refresh }}" != "null" ] && [ -n "${{ steps.token.outputs.refresh }}" ]; then
-            gh secret set NAVER_REFRESH_TOKEN --body "${{ steps.token.outputs.refresh }}"
+          gh secret set NAVER_ACCESS_TOKEN --body "$ACCESS"
+          if [ "$REFRESH" != "null" ] && [ -n "$REFRESH" ]; then
+            gh secret set NAVER_REFRESH_TOKEN --body "$REFRESH"
           fi
-          echo "✅ Secrets updated: NAVER_ACCESS_TOKEN, NAVER_REFRESH_TOKEN"
+          echo "✅ NAVER_ACCESS_TOKEN / NAVER_REFRESH_TOKEN 저장 완료"
