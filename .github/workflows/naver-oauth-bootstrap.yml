@@ -27,6 +27,6 @@ jobs:
           NAVER_REFRESH_TOKEN: ${{ secrets.NAVER_REFRESH_TOKEN }}
           DEFAULT_CATEGORY_ID: ${{ secrets.DEFAULT_CATEGORY_ID }}
           TIMEZONE: Asia/Seoul
-          DRY_RUN: 'false'
+          DRY_RUN: 'true'
         run: |
           python -m src.main
