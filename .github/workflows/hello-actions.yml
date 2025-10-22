@@ -1,0 +1,9 @@
+name: Hello Actions
+on:
+  workflow_dispatch: {}  # 수동 실행 버튼 표시용
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello, Actions!"
