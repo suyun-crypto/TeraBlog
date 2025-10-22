@@ -19,11 +19,11 @@ jobs:
           pip install -r requirements.txt
       - name: Run publisher
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
-          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-          NAVER_ACCESS_TOKEN: ${{ secrets.NAVER_ACCESS_TOKEN }}
+          NOTION_TOKEN: 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
+          NOTION_DATABASE_ID: 2935abc12af8803c9950f9e5f84d9c76
+          NAVER_CLIENT_ID: y6iD4sEK_JmhJgegNRTQ
+          NAVER_CLIENT_SECRET: Fmgw6tM8wG 
+          NAVER_ACCESS_TOKEN: le4LRnH2KQdgrBZH0w 
           NAVER_REFRESH_TOKEN: ${{ secrets.NAVER_REFRESH_TOKEN }}
           DEFAULT_CATEGORY_ID: ${{ secrets.DEFAULT_CATEGORY_ID }}
           TIMEZONE: Asia/Seoul
