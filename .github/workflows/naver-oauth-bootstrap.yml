@@ -1,14 +1,14 @@
 name: Naver OAuth Bootstrap
 
 on:
-  workflow_dispatch: {}  # 수동 실행 버튼
+  workflow_dispatch: {}  # 수동 실행 버튼 표시 (Run workflow가 생김)
 
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: write
+      actions: write       # 토큰을 저장하기 위해 필요
       statuses: write
       id-token: write
     env:
@@ -32,10 +32,10 @@ PY
           echo "STATE=$STATE" >> $GITHUB_ENV
           echo "auth-url=$AUTH_URL" >> $GITHUB_OUTPUT
           echo ""
-          echo "[1/3] 위 URL을 클릭해 네이버 로그인/동의하세요."
-          echo "동의 후 열리는 webhook.site 페이지는 닫아도 됩니다."
+          echo "[1/3] 위 URL 클릭 → 네이버 로그인/동의하세요."
+          echo "로그인 완료 후 웹훅 페이지는 바로 닫아도 됩니다."
 
-      - name: Wait for OAuth callback on webhook.site (up to 5 minutes)
+      - name: Wait for OAuth callback on webhook.site (max 5 min)
         id: waitcode
         run: |
           python3 - <<'PY'
@@ -51,7 +51,7 @@ def fetch():
 
 code=None
 start=time.time()
-while time.time()-start < 300:  # 5 minutes
+while time.time()-start < 300:  # 5 minutes 대기
     data=fetch()
     for req in data.get('data', []):
         url=req.get('url','') or ''
@@ -67,10 +67,43 @@ while time.time()-start < 300:  # 5 minutes
     time.sleep(3)
 
 if not code:
-    print('ERROR: code not received. Make sure you clicked the authorize URL and the redirect URI matches in Naver console.')
+    print('ERROR: code 못 받음 – Redirect URI or WEBHOOK 설정 확인 요망')
     sys.exit(1)
 
 print('Got code:', code)
 with open(os.environ['GITHUB_OUTPUT'],'a') as f:
     f.write(f"code={code}\n")
 PY
+
+      - name: Exchange code for tokens
+        id: token
+        run: |
+          CODE=${{ steps.waitcode.outputs.code }}
+          RESP=$(curl -sS -X POST "https://nid.naver.com/oauth2.0/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=authorization_code" \
+            -d "client_id=${NAVER_CLIENT_ID}" \
+            -d "client_secret=${NAVER_CLIENT_SECRET}" \
+            -d "code=${CODE}" \
+            -d "state=${STATE}")
+          echo "$RESP" | jq .
+          ACCESS=$(echo "$RESP" | jq -r .access_token)
+          REFRESH=$(echo "$RESP" | jq -r .refresh_token)
+          if [ -z "$ACCESS" ] || [ "$ACCESS" = "null" ]; then echo "❌ Token 교환 실패"; exit 1; fi
+          echo "access=$ACCESS" >> $GITHUB_OUTPUT
+          echo "refresh=$REFRESH" >> $GITHUB_OUTPUT
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gh jq
+
+      - name: Save tokens to repo secrets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh secret set NAVER_ACCESS_TOKEN --body "${{ steps.token.outputs.access }}"
+          if [ "${{ steps.token.outputs.refresh }}" != "null" ] && [ -n "${{ steps.token.outputs.refresh }}" ]; then
+            gh secret set NAVER_REFRESH_TOKEN --body "${{ steps.token.outputs.refresh }}"
+          fi
+          echo "✅ Secrets updated: NAVER_ACCESS_TOKEN, NAVER_REFRESH_TOKEN"
