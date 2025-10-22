@@ -1,0 +1,32 @@
+name: Publish to Naver Blog
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 * * * *'  # 매시 정각(UTC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run publisher
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          NAVER_ACCESS_TOKEN: ${{ secrets.NAVER_ACCESS_TOKEN }}
+          NAVER_REFRESH_TOKEN: ${{ secrets.NAVER_REFRESH_TOKEN }}
+          DEFAULT_CATEGORY_ID: ${{ secrets.DEFAULT_CATEGORY_ID }}
+          TIMEZONE: Asia/Seoul
+          DRY_RUN: 'false'
+        run: |
+          python -m src.main
